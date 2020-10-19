@@ -1,0 +1,317 @@
+#!/bin/bash
+
+# Error messages follow
+no_oper_err="Operation needs to be specified!"
+num_args_err="Incorrect number of arguments for this operation!"
+no_force_err="Force option needs to be added for this operation!"
+bloked_err="prevents this operation from completing!"
+no_match_err="No match found!"
+datadir_err="Data directory cannot be crated or written into!"
+illegal_oper_err="Ilegall operation! Run \"./studis pomoc\" for help."
+
+date_err="Date must be in a range from 2000-01-01 to 2 years from now
+and format YYYY-MM-DD)"
+id_err="Must be 1-8 letter word alfanumeric!"
+exist_err="already exists!"
+no_exist_err="does not exist!"
+
+semester_str="Fakulta  | Semestr  | Od         | Název\n-----------------------------------------\n"
+subject_str="Fakulta  | Semestr  | Kurz     | Uk | Kr | Název
+----------------------------------------------------\n"
+
+help_string="Usage: ./studis [OPTION]... OPERATION [ARGUMENT]
+Executes OPERATION with provided arguments.
+    Options: 
+        -d directory_path       provides path for data directory
+        -f                      force critical operations
+        ...visit PV004 UNIX LAB for more help!"
+
+function error_exit {
+  printf '%s\n' "$1" >&2 && exit 1
+}
+
+function parse_options() {
+  datadir=./datadir
+  force=false
+  while getopts 'd:f' option; do
+    case $option in
+      d)
+        datadir=$OPTARG
+        ;;
+      f)
+        force=true
+        ;;
+      ?)
+        error_exit "$help_string"
+        ;;
+    esac
+  done
+}
+
+function prepare_workspace() {
+  mkdir $datadir 2> /dev/null || [ -d $datadir -a -w $datadir ] \
+    || error_exit "$datadir_err"
+  log=$datadir/studis.log
+  faculty=$datadir/faculty.dat
+  semester=$datadir/semester.dat
+  subject=$datadir/subject.dat
+  student=$datadir/student.dat
+  enroll=$datadir/enroll.dat
+  grade=$datadir/grade.dat
+  touch $log $faculty $semester $subject $student $enroll $grade
+  echo `date "+%F %H:%M.%S"` $$ "x${LOGNAME#x}" $0 $@ >> $log
+}
+
+# Used: $1=min args, $2=max args, $3...=$@
+function arg_check() {
+  [ $[$#-3] -lt $1 -o $[$#-3] -gt $2 ] && error_exit "$num_args_err"
+}
+
+function id_check() {
+  [ -z "$1" -o ${#1} -gt "8" ] || [[ "$1" =~ [^[:alnum:]] ]] && \
+    error_exit "$id_err"
+}
+
+function date_check() {
+  day=$(date -d "$1" +%s)
+  start=$(date -d "$2" +%s)
+  end=$(date "+%s" -d $(date "+%F" -d "$3"))
+  [ $(date "+%F" -d "$1") = "$1" ] \
+    && [ $day -ge $start -a $day -le $end ] \
+    || error_exit "$date_err"
+}
+
+function main() {
+  [ $# -lt 1 ] && error_exit "$no_oper_err"
+  case $1 in 
+    cesta-adresář|cesta-adresar)
+      arg_check "0" "0" "$@"
+      echo $datadir
+      ;;
+    pomoc)
+      arg_check "0" "0" "$@"
+      printf '%s\n' "$help_string"
+      ;;
+    smaž-adresář|smaz-adresar)
+      arg_check "0" "0" "$@"
+      if $force; then rm -rf $datadir; else error_exit "$no_force_err"; fi
+      ;;
+    dej-log)
+      arg_check "0" "1" "$@"
+      if [ -z $2 ]; then 
+        cat $log
+      else 
+        egrep $2 $log 2> /dev/null || exit 1
+      fi
+      ;;
+    fakulta-nová|fakulta-nova)
+      arg_check "2" "2" "$@"
+      id_check "$2"
+      grep -sq "^$2|" $faculty && error_exit "Faculty $exist_err"
+      printf "%s|%s\n" "$2" "$3" >> $faculty
+      ;;
+    fakulta-název|fakulta-nazev)
+      arg_check "2" "2" "$@"
+      grep -sq "^$2|" $faculty || error_exit "Faculty $no_exist_err"
+      sed -i "s/^$2|.*/$2|$3/" $faculty
+      ;;
+    fakulta-smaž|fakulta-smaz)
+      arg_check "1" "1" "$@"
+      grep -sq "^$2|" $faculty || error_exit "Faculty $no_exist_err"
+      grep -sq "^$2|" $semester && error_exit "Semester $bloked_err"
+      sed -i "/^$2|/d" $faculty
+      ;;
+    fakulta-výpis|fakulta-vypis)
+      arg_check "0" "1" "$@"
+      printf "Fakulta  | Název\n--------------------------\n"
+      regex=""
+      if [ -n "$2" ]; then regex="^$2|"; fi
+      grep "$regex" $faculty | (IFS='|'; while read id name; \
+        do printf "%-8s | %s\n" "$id" "$name"; done) | sort
+      ;;
+    semestr-datum)
+      arg_check "3" "3" "$@"
+      grep -sq "^$2|$3|" $semester || error_exit "Semester $no_exist_err"
+      date_check "$4" "2000-01-01" "+2 years"
+      sed -i "s/^$2|$3|.*|\(.*\)/$2|$3|$4|\1/" $semester
+      ;;
+    semestr-název|semestr-nazev)
+      arg_check "3" "3" "$@"
+      grep -sq "^$2|$3|" $semester || error_exit "Semester $no_exist_err"
+      sed -i "s/^$2|$3|\(.*\)|.*/$2|$3|\1|$4/" $semester
+      ;;
+    semestr-nový|semestr-novy)
+      arg_check "4" "4" "$@"
+      grep -q "^$2|" $faculty || error_exit "Faculty $no_exist_err"
+      id_check "$3"
+      grep -q "^$2|$3|" $semester && error_exit "Semester $exist_err"
+      date_check "$4" "2000-01-01" "+2 years"
+      printf "%s|%s|%s|%s\n" "$2" "$3" "$4" "$5" >> $semester
+      ;;
+    semestr-smaž|semestr-smaz)
+      arg_check "2" "2" "$@"
+      grep -sq "^$2|$3|" $semester || error_exit "Semester $no_exist_err"
+      grep -sq "^$2|$3|" $subject && error_exit "Subject $bloked_err"
+      sed -i "/^$2|$3/d" $semester
+      ;;
+    semestr-výpis|semestr-vypis)
+      arg_check "0" "2" "$@"
+      regex=""
+      if [ -n "$2" ]; then regex="^$2|"; fi
+      if [ -n "$3" ]; then regex="$regex$3|"; fi
+      grep -qsi "$regex" $semester || error_exit "$no_match_err"
+      printf "$semester_str"
+      grep -is "$regex" $semester \
+        | (IFS='|'; while read faculty id day name; \
+        do printf "%-8s | %-8s | %-10s | %s\n"\
+        "$faculty" "$id" "$day" "$name"; done) | sort -t"|" -k3,3 -k1,1
+      ;;
+    předmět-kredity|predmet-kredity)
+      arg_check "4" "4" "$@"
+      grep -sqi "^$2|$3|$4|" $subject || error_exit "Subject $no_exist_err"
+      [ "$5" -le "20" -a "$5" -ge "0" ] 2> /dev/null \
+        && [ ${#5} -le "2" ] \
+        || error_exit "Credits in range 0-20!"
+      sed -i "s/^\($2|$3|$4|.*|\).*\(|.*\)/\1$5\2/I" $subject
+      ;;
+    předmět-nový|predmet-novy)
+      arg_check "6" "6" "$@"
+      grep -sq "^$2|$3|" $semester \
+        || error_exit "Semester on faculty $no_exist_err"
+        
+      # Avoid mathching accented letters
+      [[ $(LC_COLLATE=C; [[ "$4" =~ ^[a-zA-Z0-9_]*$ ]] && echo y) == y  ]] \
+        && [[ $4 == [a-zA-Z]* ]] && [ ${#4} -lt "9" ] \
+        || error_exit "$id_err"
+        
+      grep -sqi "^.*|.*|$4|.*" $subject && error_exit "Subject $exist_err"
+      [[ $6 =~ ^(zk|k|z)$  ]] || error_exit "Only zk|k|z allowed!"
+      [ "$7" -le "20" -a "$7" -ge "0" ] 2> /dev/null && [ ${#7} -le "2" ] \
+        || error_exit "Credits must be in range 0-20!"
+      printf "%s|%s|%s|%s|%s|%s\n" "$2" "$3" "$4"\
+        "$6" "$7" "$5" >> $subject
+      ;;
+    předmět-výpis|predmet-vypis)
+      arg_check "0" "3" "$@"
+      regex=""
+      if [ -n "$2" ]; then regex="^$2|"; fi
+      if [ -n "$3" ]; then regex="$regex$3|"; fi
+      if [ -n "$4" ]; then regex="$regex$4|"; fi
+      grep -qsi "$regex" $subject || error_exit "$no_match_err"
+      printf "$subject_str"
+      grep -is "$regex" $subject \
+        | (IFS='|'; while read faculty semest course end credits name; \
+        do printf "%-8s | %-8s | %-8s | %-2s | %2s | %s\n" \
+        "$faculty" "$semest" "$course" "$end" "$credits" "$name"; done) \
+        | sort -s -t"|" -k1,1 -k2,2 -k3,3
+      ;;
+    předmět-název|predmet-nazev)
+      arg_check "4" "4" "$@"
+      grep -sqi "^$2|$3|$4|" $subject || error_exit "Subject $no_exist_err"
+      sed -i "s/^\($2|$3|$4|.*|.*|\).*/\1$5/I" $subject
+      ;;
+    předmět-ukončení|predmet-ukonceni)
+      arg_check "4" "4" "$@"
+      [[ $5 =~ ^(zk|k|z)$  ]] || error_exit "Only zk|k|z algd!"
+      grep -sqi "^$2|$3|$4|" $subject || error_exit "Subject $no_exist_err"
+      sed -i "s/^\($2|$3|$4|\).*\(|.*|.*\)/\1$5\2/I" $subject
+      ;;
+    předmět-smaž|predmet-smaz)
+      arg_check "3" "3" "$@"
+      grep -sqi "^$2|$3|$4|" $subject || error_exit "Subject $no_exist_err"
+      grep -sqi "^$2|$3|$4|" $enroll && error_exit "Subject enrolled!"
+      sed -i "/^$2|$3|$4|/Id" $subject
+      ;;
+    student-export)
+      arg_check "0" "0" "$@"
+      [ -z "$(cat $student)" ] && error_exit "$no_match_err"
+      cat $student | (IFS="|"; while read uco name surname date mail; \
+        do printf "%s;%s\n" "$uco" "$mail"; done) | sort -n -t";" -k1,1
+      ;;
+    student-nový|student-novy)
+      arg_check "5" "5" "$@"
+      [ "$2" -gt "0" ] 2> /dev/null || error_exit "Uco must be greater than 0!"
+      grep -q "^$2|" $student && error_exit "Student $no_exist_err"
+      [ -z "$3" -o -z "$4" ] && error_exit "Name and surname must be nonempty!"
+      date_check "$5" "1900-01-01" "" 
+      echo "$6" | (LC_COLLATE=C; egrep -q \
+      "^[[:alnum:]._-]+@([[:alnum:]_-]+\.)+[[:alnum:]_-]+$") \
+      || error_exit "Invalid email adress!"  
+      printf "%s|%s|%s|%s|%s\n" "$2" "$3" "$4" "$5" "$6" >> $student 
+      ;;
+    student-smaž|student-smaz)
+      arg_check "1" "1" "$@"
+      grep -q "^$2|" $student || error_exit "Student $no_exist_err"
+      grep -q "^.*|.*|.*|$2" $enroll && error_exit "Enrollment $bloked_err!"
+      sed -i "/^$2|/d" $student
+      ;;
+    zápis|zapis)
+      arg_check "4" "4" "$@"
+      grep -qi "^$2|$3|$4|" $subject && grep -q "^$5|" $student \
+        || error_exit "Cannot enroll!"
+      grep -qi "^$2|$3|$4|$5" $enroll && error_exit "Enrollment $exist_err"
+      printf "%s|%s|%s|%s\n" "$2" "$3" "$4" "$5" >> $enroll
+      ;;
+    zápis-předmět|zapis-predmet)
+      arg_check "3" "3" "$@"
+      grep -qi "^$2|$3|$4" $subject || error_exit "Subject $no_exist_err"
+      grep -qi "^$2|$3|$4|" $enroll || error_exit "Enrollment $no_exist_err"
+      join -t "|" -1 1 -2 1 <(grep -i "^$2|$3|$4|" $enroll | cut -d "|" -f 4 | sort)\
+        <(cut -d "|" -f 1-3 $student | sort -f) \
+        | sort -t"|" -k3,3 -k2,2 -k1,1n -s | (IFS="|"; while read uco name surname; \
+        do printf "%s, %s; učo %s\n" $surname $name $uco; done)
+      ;;
+    známka|znamka)
+      arg_check "5" "5" "$@"
+      grep -q "^$2|$3|$4|$5" $enroll || error_exit "Enrollment $no_exist_err"
+      mark=$(grep "^$2|$3|$4|" $subject | cut -d "|" -f 4)
+      case $mark in
+        zk)
+          [[ "$6" =~ ^[A-F]$ ]] || error_exit "Illegal grade!"
+          ;;
+        k)
+          [[ "$6" =~ ^[PN]$ ]] || error_exit "Illegal grade!"
+          ;;
+        z)
+          [[ "$6" =~ ^[ZN]$ ]] || error_exit "Illegal grade!"
+          ;;
+      esac
+      grep -qi "^$2|$3|$4|$5|[A-EPZ]|" $grade && error_exit "Already absolved!"
+      [[ "$(grep -i "^$2|$3|$4|$5|" $grade | wc -l)" -ge 3 ]] \
+        && error_exit "Three grades $exist_err"
+      printf "%s|%s|%s|%s|%s|%s\n" "$2" "$3" "$4" "$5" "$6" \
+      "$(date "+%F %H:%M.%S")" >> $grade
+      ;;
+    známka-výpis|znamka-vypis)
+      if [ $# -eq 2 ]; then
+        join -i <(grep -i "^.*|.*|.*|$2" $grade | sort -f -t"|" -k3,3) \
+          <(sort -f -t"|" -k3,3 $subject) -1 3 -2 3 -t "|" -o "2.3,2.6,1.5,1.6" \
+          | sort  -sf -t"|" -k1,1 -k4,4  | (IFS="|"; while read code name mark date;
+          do printf "%s %s: %s %s\n" "$code" "$name" "$mark" "$date"; done)
+      else 
+        if [ $# -eq 4 ]; then
+          join <(grep -i "^$2|$3|$4|" $grade | sort -t "|" -k4,4 ) \
+            <(sort -t "|" -k1,1 $student) -1 4 -2 1 -t "|" -o "2.2,2.3,2.1,1.5,1.6" \
+	        | sort -s -t"|" -k2,2 -k1,1 -k5,5 | (IFS="|"; while read name surname uco mark date; do printf "%s, %s; učo %s: %s %s\n" \
+	      "$surname" "$name" "$uco" "$mark" "$date"; done)
+        else error_exit "$num_args_err"
+        fi
+      fi
+      ;;
+    zápis-smaž|zapis-smaz)
+      arg_check "4" "4" "$@"
+      sed -i "/^$2|$3|$4|$5/d" $enroll
+      sed -i "/^$2|$3|$4|$5|/d" $grade
+      ;;
+    *)
+      error_exit "$illegal_oper_err"
+      ;;
+  esac
+}
+
+parse_options "$@"
+prepare_workspace "$@"
+shift $(($OPTIND-1))
+main "$@"
+exit 0
+
